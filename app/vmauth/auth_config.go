@@ -121,10 +121,16 @@ type URLPrefix struct {
 	bus []*backendURL
 }
 
+type basicAuth struct {
+	Username     string  `yaml:"username"`
+	Password     string  `yaml:"password"`
+}
+
 type backendURL struct {
 	brokenDeadline     uint64
 	concurrentRequests int32
 	url                *url.URL
+	basicAuth 		   *basicAuth
 }
 
 func (bu *backendURL) isBroken() bool {
@@ -190,38 +196,65 @@ func (up *URLPrefix) getLeastLoadedBackendURL() *backendURL {
 
 // UnmarshalYAML unmarshals up from yaml.
 func (up *URLPrefix) UnmarshalYAML(f func(interface{}) error) error {
+	type urlPrefixEntry struct {
+		URL string `yaml:"url"`
+		BasicAuth *basicAuth `yaml:"basic_auth"`
+	}
+
 	var v interface{}
 	if err := f(&v); err != nil {
 		return err
 	}
-	var urls []string
+	var backends []urlPrefixEntry
+
 	switch x := v.(type) {
 	case string:
-		urls = []string{x}
+		backends = []urlPrefixEntry{urlPrefixEntry{URL: x}}		
+	case map[interface {}]interface{}:
+		var entry urlPrefixEntry
+        if err := f(&entry); err != nil {
+			return fmt.Errorf("`url_prefix` must contain at least a single url")
+		}
+		backends = []urlPrefixEntry{entry}
 	case []interface{}:
 		if len(x) == 0 {
 			return fmt.Errorf("`url_prefix` must contain at least a single url")
 		}
-		us := make([]string, len(x))
-		for i, xx := range x {
-			s, ok := xx.(string)
-			if !ok {
-				return fmt.Errorf("`url_prefix` must contain array of strings; got %T", xx)
+		bs := make([]urlPrefixEntry, len(x))
+		for i, vv := range x {
+			switch xx := vv.(type) {
+				case string:
+					bs[i] = urlPrefixEntry{URL: xx}
+				case map[interface {}]interface {}:
+					yData, err := yaml.Marshal(&vv)
+					if err != nil {
+						return fmt.Errorf("`url_prefix` must contain array of strings or urlPrefixes; got %w", err)
+					}
+					var entry urlPrefixEntry
+					if err = yaml.UnmarshalStrict(yData, &entry); err != nil {
+						return fmt.Errorf("`url_prefix` must contain array of strings or urlPrefixes; got %T", entry)
+					}
+					bs[i] = entry
+				default:
+					return fmt.Errorf("`url_prefix` must contain array of strings; got %T", xx)
 			}
-			us[i] = s
 		}
-		urls = us
+		backends = bs
 	default:
 		return fmt.Errorf("unexpected type for `url_prefix`: %T; want string or []string", v)
 	}
-	bus := make([]*backendURL, len(urls))
-	for i, u := range urls {
-		pu, err := url.Parse(u)
+
+	// Refactor this name for url_prefixes
+
+	bus := make([]*backendURL, len(backends))
+	for i, b := range backends {
+		pu, err := url.Parse(b.URL)
 		if err != nil {
-			return fmt.Errorf("cannot unmarshal %q into url: %w", u, err)
+			return fmt.Errorf("cannot unmarshal %q into url: %w", b.URL, err)
 		}
 		bus[i] = &backendURL{
 			url: pu,
+			basicAuth: b.BasicAuth,
 		}
 	}
 	up.bus = bus
