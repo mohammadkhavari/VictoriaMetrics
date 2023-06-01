@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -174,7 +175,19 @@ func processRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo) {
 		} else { // Update path for regular routes.
 			targetURL = mergeURLs(targetURL, u)
 		}
-		ok := tryProcessingRequest(w, r, targetURL, headers)
+
+		backendHeaders := headers
+
+		// Add authentication to backend headers
+		if bu.basicAuth != nil {
+			backendHeaders = cloneHeaders(backendHeaders)
+			token := bu.basicAuth.Username + ":" + bu.basicAuth.Password
+			token64 := base64.StdEncoding.EncodeToString([]byte(token))
+			Value := "Basic " + token64
+			backendHeaders = updateHeaderValue(backendHeaders, "Authorization", Value)
+		}
+
+		ok := tryProcessingRequest(w, r, targetURL, backendHeaders)
 		bu.put()
 		if ok {
 			return
@@ -241,6 +254,31 @@ func copyHeader(dst, src http.Header) {
 			dst.Add(k, v)
 		}
 	}
+}
+
+func updateHeaderValue(headers []Header, name string, newValue string) []Header {
+	var headerFound bool
+
+	for i := 0; i < len(headers); i++ {
+		if headers[i].Name == name {
+			headers[i].Value = newValue
+			headerFound = true
+			break
+		}
+	}
+
+	if !headerFound {
+		newHeader := Header{Name: name, Value: newValue}
+		headers = append(headers, newHeader)
+	}
+
+	return headers
+}
+
+func cloneHeaders(headers []Header) []Header {
+	clonedHeaders := make([]Header, len(headers))
+	copy(clonedHeaders, headers)
+	return clonedHeaders
 }
 
 func sanitizeRequestHeaders(r *http.Request) *http.Request {
